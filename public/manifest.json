@@ -1,0 +1,17 @@
+{
+  "name": "LottoGolden 6/45",
+  "short_name": "LottoGolden",
+  "description": "금주의 주간 고정 당첨 예상 번호 (토요일 21:00 ~ 차주 토요일 20:00 고정)",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07090e",
+  "theme_color": "#07090e",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
