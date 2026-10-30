@@ -358,7 +358,15 @@ function renderApp() {
 
           <div class="form-group">
             <label>티켓 레이블 (이름)</label>
-            <input type="text" id="form-ticket-label" class="form-input" placeholder="예: A게임 (다빈출 추천), 자동 구매 등" required />
+            <input type="text" id="form-ticket-label" class="form-input" placeholder="'A' 또는 'a' 입력 시 추천 6개 번호 자동 등록" required />
+            <div class="quick-game-chips">
+              <span style="font-size: 0.78rem; color: #94a3b8; align-self: center;">추천 번호 빠른 입력:</span>
+              <button type="button" class="quick-game-chip" data-chip="A">A게임</button>
+              <button type="button" class="quick-game-chip" data-chip="B">B게임</button>
+              <button type="button" class="quick-game-chip" data-chip="C">C게임</button>
+              <button type="button" class="quick-game-chip" data-chip="D">D게임</button>
+              <button type="button" class="quick-game-chip" data-chip="E">E게임</button>
+            </div>
           </div>
 
           <div class="form-group">
@@ -997,6 +1005,55 @@ function bindEvents(games, activeRound) {
 
   // 폼 입력 시 번호 제어 (1~45 정수만, 2자리 입력 시 다음 칸 자동 이동)
   setupLottoNumberInputs('.form-num-input');
+
+  // 티켓 레이블에 'A', 'a', 'B', 'b' 등 입력 시 하단 6개 번호 자동 완성
+  const labelInput = document.getElementById('form-ticket-label');
+  const modalRoundInput = document.getElementById('form-ticket-round');
+
+  const fillRecommendedGameNumbers = (gameLetter) => {
+    const key = gameLetter.toUpperCase();
+    const currentRound = parseInt(modalRoundInput?.value, 10) || activeRound;
+    const currentGames = generateWeeklyGames(currentRound);
+    const targetGame = currentGames.find(g => g.id === key);
+    if (!targetGame) return false;
+
+    // 모달 내 6개 번호 입력칸에 추천 번호 채우기
+    const numInputs = Array.from(document.querySelectorAll('.form-num-input'));
+    targetGame.numbers.forEach((num, idx) => {
+      if (numInputs[idx]) {
+        numInputs[idx].value = String(num);
+      }
+    });
+
+    // 레이블 텍스트 자동 채우기
+    if (labelInput) {
+      labelInput.value = `${key}게임 (${targetGame.title})`;
+    }
+
+    showToast(`제${currentRound}회 ${key}게임 추천 번호(6개)가 등록되었습니다!`, '🎯');
+    return true;
+  };
+
+  if (labelInput) {
+    labelInput.addEventListener('input', (e) => {
+      const val = e.target.value.trim();
+      const upper = val.toUpperCase();
+      // 'A', 'a', 'B', 'b', 'C', 'c', 'D', 'd', 'E', 'e' 또는 'A게임', 'a게임' 등 입력 감지
+      if (['A', 'B', 'C', 'D', 'E'].includes(upper)) {
+        fillRecommendedGameNumbers(upper);
+      } else if (/^[A-Ea-e]($|\b|게임)/.test(val)) {
+        fillRecommendedGameNumbers(val.charAt(0).toUpperCase());
+      }
+    });
+  }
+
+  // 퀵 버튼 클릭 시에도 즉시 채우기
+  document.querySelectorAll('.quick-game-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const key = chip.getAttribute('data-chip');
+      fillRecommendedGameNumbers(key);
+    });
+  });
 
   // 회차 셀렉트
   const roundSelect = document.getElementById('round-select');
