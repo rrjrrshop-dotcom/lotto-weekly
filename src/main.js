@@ -7,13 +7,26 @@ import {
   RECENT_ROUNDS,
   evaluateTicket
 } from './lottoEngine.js';
+import {
+  getTickets,
+  getTicketById,
+  createTicket,
+  createBulkTickets,
+  updateTicket,
+  deleteTicket,
+  clearAllTickets,
+  exportTicketsJSON,
+  importTicketsJSON
+} from './storage.js';
 
 // 애플리케이션 상태
-let currentTab = 'analysis';
+let currentTab = 'analysis'; // 'analysis' | 'storage' | 'checker' | 'history'
+let storageFilter = 'all'; // 'all' | 'current' | 'purchased' | 'won'
 let selectedRound = null;
 let customInputs = ['', '', '', '', '', ''];
+let editingTicketId = null; // null: 생성 모드, string: 수정 모드
 
-// 토스트 메시지 함수
+// 토스트 메시지 헬퍼
 function showToast(message, icon = '✨') {
   const container = document.getElementById('toast-container');
   if (!container) return;
@@ -36,13 +49,14 @@ function renderBall(num, isBonus = false) {
   return `<div class="lotto-ball ball-${color.bg} ${bonusClass}" title="${num}번 (${color.label})">${padNum}</div>`;
 }
 
-// 렌더링 메인 함수
+// 메인 렌더 함수
 function renderApp() {
   const app = document.getElementById('app');
   const state = getLottoState();
   const activeRound = selectedRound || state.targetRound;
   const isCurrentActiveRound = activeRound === state.targetRound;
   const games = generateWeeklyGames(activeRound);
+  const allTickets = getTickets();
 
   // 날짜 포맷팅
   const fmtDate = (d) => {
@@ -64,7 +78,7 @@ function renderApp() {
         LottoGolden 6/45
       </h1>
       <p class="brand-subtitle">
-        매주 <strong>토요일 오후 9시</strong>부터 <strong>다음 주 토요일 오후 8시</strong>까지 1주일간 절대 변하지 않는 신뢰의 5대 골든 조합
+        매주 <strong>토요일 오후 9시</strong>부터 <strong>다음 주 토요일 오후 8시</strong>까지 1주일간 절대 변하지 않는 신뢰의 5대 골든 조합 & 나만의 번호 보관함
       </p>
     </header>
 
@@ -111,8 +125,11 @@ function renderApp() {
         <button class="btn btn-primary" id="copy-all-btn">
           <span>📋 5게임 일괄 복사</span>
         </button>
-        <button class="btn btn-secondary" id="open-slip-modal-btn">
-          <span>🧾 실물 복권 슬립 보기</span>
+        <button class="btn btn-secondary" id="save-all-to-db-btn" title="금주 5게임을 내 보관함 DB에 한 번에 저장">
+          <span>💾 5게임 일괄 저장</span>
+        </button>
+        <button class="btn" id="open-slip-modal-btn">
+          <span>🧾 실물 슬립 보기</span>
         </button>
       </div>
     </div>
@@ -139,31 +156,48 @@ function renderApp() {
               <span class="stat-pill">홀짝 ${game.stats.oddCount}:${game.stats.evenCount}</span>
               ${game.tags.map(t => `<span class="stat-pill">${t}</span>`).join('')}
             </div>
-            <button class="btn-icon copy-game-btn" data-game="${game.id}" data-numbers="${game.numbers.join(', ')}" title="이 게임 번호 복사">
-              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            </button>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn-icon save-single-game-btn" data-game="${game.id}" data-numbers="${game.numbers.join(',')}" data-title="${game.id}게임 (${game.title})" title="내 보관함 DB에 저장">
+                <svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                  <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                  <polyline points="7 3 7 8 15 8"></polyline>
+                </svg>
+              </button>
+              <button class="btn-icon copy-game-btn" data-game="${game.id}" data-numbers="${game.numbers.join(', ')}" title="이 번호 복사">
+                <svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       `).join('')}
     </section>
 
-    <!-- 통계 및 보조 기능 탭 네비게이션 -->
+    <!-- 탭 네비게이션 -->
     <nav class="tabs-nav">
+      <button class="tab-btn ${currentTab === 'storage' ? 'active' : ''}" data-tab="storage">
+        💾 나의 번호 보관함 (${allTickets.length})
+      </button>
       <button class="tab-btn ${currentTab === 'analysis' ? 'active' : ''}" data-tab="analysis">
         📊 심층 통계 분석
       </button>
       <button class="tab-btn ${currentTab === 'checker' ? 'active' : ''}" data-tab="checker">
-        🎯 번호 채점기 & 직전 당첨 확인
+        🎯 번호 채점기 & 당첨 확인
       </button>
       <button class="tab-btn ${currentTab === 'history' ? 'active' : ''}" data-tab="history">
-        📜 회차별 타임머신 (투명성 검증)
+        📜 회차별 타임머신
       </button>
     </nav>
 
-    <!-- 탭 1: 심층 통계 분석 -->
+    <!-- 탭 1: DB 번호 보관함 (CRUD 전용 화면) -->
+    <div class="tab-content ${currentTab === 'storage' ? 'active' : ''}" id="tab-storage">
+      ${renderStorageSection(allTickets, state.targetRound)}
+    </div>
+
+    <!-- 탭 2: 심층 통계 분석 -->
     <div class="tab-content ${currentTab === 'analysis' ? 'active' : ''}" id="tab-analysis">
       <div class="analysis-grid">
         <div class="analysis-card">
@@ -183,7 +217,7 @@ function renderApp() {
       </div>
     </div>
 
-    <!-- 탭 2: 번호 채점기 & 직전 당첨 확인 -->
+    <!-- 탭 3: 번호 채점기 & 직전 당첨 확인 -->
     <div class="tab-content ${currentTab === 'checker' ? 'active' : ''}" id="tab-checker">
       <div class="checker-card">
         <div class="section-heading" style="margin-bottom: 12px;">
@@ -198,7 +232,7 @@ function renderApp() {
 
         <h5 style="margin-bottom: 8px; font-weight: 700;">내 번호 직접 입력 채점하기</h5>
         <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 14px;">
-          원하시는 6개 번호를 입력하거나 아래 버튼을 누르면 직전 당첨 번호와 즉시 대조합니다.
+          원하시는 6개 번호를 입력하거나 보관함 번호와 즉시 대조해보세요.
         </p>
 
         <div class="checker-inputs">
@@ -214,7 +248,7 @@ function renderApp() {
       </div>
     </div>
 
-    <!-- 탭 3: 회차별 타임머신 -->
+    <!-- 탭 4: 회차별 타임머신 -->
     <div class="tab-content ${currentTab === 'history' ? 'active' : ''}" id="tab-history">
       <div class="analysis-card" style="margin-bottom: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -226,7 +260,7 @@ function renderApp() {
           </select>
         </div>
         <p style="font-size: 0.85rem; color: #94a3b8; line-height: 1.6;">
-          LottoGolden은 회차별 고유 시드 기반으로 번호가 생성되므로, 이전 회차를 선택하셔도 당시 추천되었던 5게임이 100% 동일하게 복원됩니다. 언제든 투명하게 확인해보실 수 있습니다.
+          LottoGolden은 회차별 고유 시드 기반으로 번호가 산출되므로, 이전 회차를 선택하셔도 당시 추천 번호 5게임이 100% 동일하게 복원됩니다.
         </p>
       </div>
 
@@ -302,15 +336,235 @@ function renderApp() {
           </p>
           <p>
             <strong>3. 결정론적 시드 PRNG 알고리즘</strong><br/>
-            회차 번호를 고유 시드로 결합한 <code>Mulberry32</code> 암호화 수준의 의사 난수 엔진을 사용하여 브라우저 캐시나 기기 환경에 무관하게 항상 일관된 결과를 산출합니다.
+            회차 번호를 고유 시드로 결합한 <code>Mulberry32</code> 의사 난수 엔진을 사용하여 브라우저 캐시나 기기 환경에 무관하게 항상 일관된 결과를 산출합니다.
           </p>
         </div>
       </div>
     </div>
+
+    <!-- 티켓 추가/수정 모달 (CRUD Modal) -->
+    <div class="modal-overlay" id="ticket-form-modal">
+      <div class="modal-card">
+        <button class="modal-close" id="close-ticket-form-modal-btn">&times;</button>
+        <h3 style="font-family: var(--font-display); font-size: 1.35rem; font-weight: 800; color: var(--gold-primary); margin-bottom: 16px;" id="ticket-modal-title">
+          💾 티켓 저장 / 수정
+        </h3>
+        
+        <form id="ticket-crud-form">
+          <div class="form-group">
+            <label>회차 (Round)</label>
+            <input type="number" id="form-ticket-round" class="form-input" min="1" max="9999" required />
+          </div>
+
+          <div class="form-group">
+            <label>티켓 레이블 (이름)</label>
+            <input type="text" id="form-ticket-label" class="form-input" placeholder="예: A게임 (다빈출 추천), 자동 구매 등" required />
+          </div>
+
+          <div class="form-group">
+            <label>로또 6개 번호 (1 ~ 45)</label>
+            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;">
+              ${[0, 1, 2, 3, 4, 5].map(i => `
+                <input type="number" min="1" max="45" class="form-input form-num-input" data-idx="${i}" placeholder="번호" required style="text-align: center; font-weight: 700; font-family: var(--font-mono); padding: 8px 4px;" />
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>메모 (구매 장소, 메모 등)</label>
+            <input type="text" id="form-ticket-memo" class="form-input" placeholder="예: 판교역 로또명당 구매, 꿈에서 본 번호" />
+          </div>
+
+          <label class="form-checkbox-row">
+            <input type="checkbox" id="form-ticket-purchased" />
+            <span style="font-size: 0.9rem; color: #cbd5e1; font-weight: 600;">실제 복권 구매 완료 (체크 시 구매 목록으로 분류)</span>
+          </label>
+
+          <div style="display: flex; gap: 10px; margin-top: 20px;">
+            <button type="submit" class="btn btn-primary" style="flex: 1; justify-content: center;">
+              저장 완료
+            </button>
+            <button type="button" class="btn" id="cancel-ticket-form-btn">
+              취소
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 숨김 파일 입력기 (JSON 백업 복원용) -->
+    <input type="file" id="import-json-file-input" accept=".json" style="display: none;" />
   `;
 
   bindEvents(games, activeRound);
   updateCountdown();
+}
+
+// ========================================================
+// DB 보관함 섹션 렌더링 (Read / Filter / Stats)
+// ========================================================
+function renderStorageSection(allTickets, targetRound) {
+  // 필터링 적용
+  let filtered = [...allTickets];
+  if (storageFilter === 'current') {
+    filtered = filtered.filter(t => t.round === targetRound);
+  } else if (storageFilter === 'purchased') {
+    filtered = filtered.filter(t => t.isPurchased);
+  } else if (storageFilter === 'won') {
+    filtered = filtered.filter(t => {
+      const match = getTicketWinStatus(t);
+      return match && match.rank > 0 && match.rank <= 5;
+    });
+  }
+
+  // 통계 계산
+  const totalCount = allTickets.length;
+  const purchasedCount = allTickets.filter(t => t.isPurchased).length;
+  const totalSpent = (purchasedCount * 1000).toLocaleString(); // 1게임 1000원
+  let wonCount = 0;
+  allTickets.forEach(t => {
+    const match = getTicketWinStatus(t);
+    if (match && match.rank > 0 && match.rank <= 5) wonCount++;
+  });
+
+  return `
+    <div class="storage-hero">
+      <div class="storage-stats-row">
+        <div class="storage-stat-item">
+          <span class="val">${totalCount}개</span>
+          <span class="lbl">총 보관 티켓</span>
+        </div>
+        <div class="storage-stat-item">
+          <span class="val" style="color: #34d399;">${purchasedCount}장</span>
+          <span class="lbl">실제 구매 티켓</span>
+        </div>
+        <div class="storage-stat-item">
+          <span class="val" style="color: #38bdf8;">${totalSpent}원</span>
+          <span class="lbl">총 구매 지출액</span>
+        </div>
+        <div class="storage-stat-item">
+          <span class="val" style="color: #fbbf24;">${wonCount}회</span>
+          <span class="lbl">당첨 기록</span>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="btn btn-primary" id="open-add-ticket-modal-btn">
+          <span>➕ 새 번호 직접 등록</span>
+        </button>
+        <button class="btn" id="export-backup-btn" title="보관함 전체 JSON 파일로 백업">
+          <span>📥 백업</span>
+        </button>
+        <button class="btn" id="trigger-import-btn" title="JSON 백업 파일 복원">
+          <span>📤 복원</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 필터 바 -->
+    <div class="storage-controls-bar">
+      <div class="filter-pills">
+        <button class="filter-pill ${storageFilter === 'all' ? 'active' : ''}" data-filter="all">
+          전체 보기 (${totalCount})
+        </button>
+        <button class="filter-pill ${storageFilter === 'current' ? 'active' : ''}" data-filter="current">
+          이번 제${targetRound}회 (${allTickets.filter(t => t.round === targetRound).length})
+        </button>
+        <button class="filter-pill ${storageFilter === 'purchased' ? 'active' : ''}" data-filter="purchased">
+          구매 완료 (${purchasedCount})
+        </button>
+        <button class="filter-pill ${storageFilter === 'won' ? 'active' : ''}" data-filter="won">
+          당첨 티켓 (${wonCount})
+        </button>
+      </div>
+
+      ${allTickets.length > 0 ? `
+        <button class="btn" id="clear-all-tickets-btn" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.3); font-size: 0.8rem; padding: 6px 12px;">
+          <span>🧹 전체 비우기</span>
+        </button>
+      ` : ''}
+    </div>
+
+    <!-- 티켓 목록 (Read List) -->
+    <div class="ticket-list">
+      ${filtered.length === 0 ? `
+        <div class="empty-state">
+          <span class="icon">🏷️</span>
+          <h4 style="color: #cbd5e1; font-weight: 700; margin-bottom: 6px;">보관된 번호가 없습니다</h4>
+          <p style="font-size: 0.85rem;">
+            상단의 <strong>[5게임 일괄 저장]</strong>이나 게임별 <strong>[💾 저장]</strong> 버튼을 누르면 이 보관함에 영구 보관됩니다.
+          </p>
+        </div>
+      ` : filtered.map(t => {
+        const winStatus = getTicketWinStatus(t);
+        return `
+          <div class="ticket-item-card" data-ticket-id="${t.id}">
+            <div class="ticket-item-header">
+              <span class="ticket-round-badge">제 ${t.round}회</span>
+              <div class="ticket-title-area">
+                <h5>
+                  <span>${t.label}</span>
+                  ${renderWinBadge(winStatus)}
+                </h5>
+                <div class="date-memo">
+                  ${t.memo ? `<span>💬 ${t.memo} · </span>` : ''}
+                  <span>등록: ${new Date(t.createdAt).toLocaleDateString()}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="balls-row">
+              ${t.numbers.map(n => renderBall(n)).join('')}
+            </div>
+
+            <div class="ticket-action-btns">
+              <!-- 구매 상태 토글 (Update) -->
+              <div class="purchase-toggle ${t.isPurchased ? 'purchased' : 'not-purchased'}" data-toggle-purchase="${t.id}" title="클릭하여 구매 완료/미구매 전환">
+                <span>${t.isPurchased ? '✓ 구매완료' : '○ 미구매'}</span>
+              </div>
+
+              <!-- 수정 버튼 (Update) -->
+              <button class="btn-icon edit-ticket-btn" data-edit-id="${t.id}" title="티켓 수정">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+              </button>
+
+              <!-- 삭제 버튼 (Delete) -->
+              <button class="btn-icon delete-ticket-btn" data-delete-id="${t.id}" title="티켓 삭제" style="color: #f43f5e;">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// 티켓 당첨 여부 판별
+function getTicketWinStatus(ticket) {
+  const roundData = RECENT_ROUNDS.find(r => r.round === ticket.round);
+  if (!roundData) {
+    return { status: 'PENDING', label: '추첨 대기' };
+  }
+  const evalResult = evaluateTicket(ticket.numbers, roundData.numbers, roundData.bonus);
+  return evalResult;
+}
+
+// 당첨 배지 HTML
+function renderWinBadge(winStatus) {
+  if (!winStatus || winStatus.status === 'PENDING') {
+    return `<span class="win-badge wait">⏳ 대기중</span>`;
+  }
+  if (winStatus.rank > 0 && winStatus.rank <= 5) {
+    return `<span class="win-badge won">🎉 ${winStatus.label}</span>`;
+  }
+  return `<span class="win-badge lose">낙첨</span>`;
 }
 
 // 대역별 분포 바 렌더링
@@ -321,7 +575,7 @@ function renderDecileBars(games) {
       totals[k] += g.stats.deciles[k];
     });
   });
-  const grandTotal = 30; // 5 games * 6 balls
+  const grandTotal = 30;
 
   const meta = [
     { key: 'yellow', label: '1~10번대 (노랑)', color: '#f59e0b' },
@@ -375,7 +629,6 @@ function renderOddEvenSummary(games) {
 
 // 총합 요약
 function renderSumDistribution(games) {
-  const sums = games.map(g => `${g.id}게임: ${g.stats.sum}`);
   return `
     <div style="display: flex; flex-direction: column; gap: 8px; padding: 6px 0;">
       ${games.map(g => `
@@ -391,7 +644,9 @@ function renderSumDistribution(games) {
   `;
 }
 
-// 이벤트 바인딩
+// ========================================================
+// 이벤트 바인딩 (CRUD Event Listeners)
+// ========================================================
 function bindEvents(games, activeRound) {
   // 개별 게임 번호 복사
   document.querySelectorAll('.copy-game-btn').forEach(btn => {
@@ -429,11 +684,239 @@ function bindEvents(games, activeRound) {
     });
   }
 
+  // 5게임 보관함 DB 일괄 저장 (Bulk Create)
+  const saveAllBtn = document.getElementById('save-all-to-db-btn');
+  if (saveAllBtn) {
+    saveAllBtn.addEventListener('click', () => {
+      createBulkTickets(games, activeRound, `제${activeRound}회차 골든 5게임`);
+      showToast(`제${activeRound}회 5게임이 내 보관함에 저장되었습니다!`, '💾');
+      confetti({ particleCount: 60, spread: 60, origin: { y: 0.7 } });
+      renderApp();
+    });
+  }
+
+  // 단일 게임 보관함 DB 저장 (Single Create)
+  document.querySelectorAll('.save-single-game-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const title = btn.getAttribute('data-title');
+      const numsStr = btn.getAttribute('data-numbers');
+      const numbers = numsStr.split(',').map(n => parseInt(n.trim(), 10));
+
+      createTicket({
+        round: activeRound,
+        label: title,
+        numbers,
+        memo: `제${activeRound}회차 추천 조합`
+      });
+
+      showToast(`'${title}'이(가) 내 보관함에 저장되었습니다!`, '💾');
+      renderApp();
+    });
+  });
+
   // 탭 전환
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       currentTab = btn.getAttribute('data-tab');
       renderApp();
+    });
+  });
+
+  // 보관함 필터 전환
+  document.querySelectorAll('.filter-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      storageFilter = btn.getAttribute('data-filter');
+      renderApp();
+    });
+  });
+
+  // 구매 상태 토글 (Update isPurchased)
+  document.querySelectorAll('.purchase-toggle').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const ticketId = btn.getAttribute('data-toggle-purchase');
+      const ticket = getTicketById(ticketId);
+      if (ticket) {
+        updateTicket(ticketId, { isPurchased: !ticket.isPurchased });
+        showToast(!ticket.isPurchased ? '구매 완료로 표시되었습니다.' : '미구매 상태로 변경되었습니다.', '🏷️');
+        renderApp();
+      }
+    });
+  });
+
+  // 티켓 삭제 (Delete)
+  document.querySelectorAll('.delete-ticket-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const ticketId = btn.getAttribute('data-delete-id');
+      if (confirm('이 티켓을 보관함에서 삭제하시겠습니까?')) {
+        deleteTicket(ticketId);
+        showToast('티켓이 삭제되었습니다.', '🗑️');
+        renderApp();
+      }
+    });
+  });
+
+  // 보관함 전체 비우기 (Clear All)
+  const clearAllBtn = document.getElementById('clear-all-tickets-btn');
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener('click', () => {
+      if (confirm('보관함의 모든 티켓을 영구 삭제하시겠습니까? (삭제 전 백업을 권장합니다)')) {
+        clearAllTickets();
+        showToast('보관함이 초기화되었습니다.', '🧹');
+        renderApp();
+      }
+    });
+  }
+
+  // JSON 백업 다운로드 (Export)
+  const exportBtn = document.getElementById('export-backup-btn');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      const json = exportTicketsJSON();
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `lotto-tickets-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('백업 파일이 다운로드되었습니다!', '📥');
+    });
+  }
+
+  // JSON 백업 복원 트리거 (Import)
+  const triggerImportBtn = document.getElementById('trigger-import-btn');
+  const importFileInput = document.getElementById('import-json-file-input');
+  if (triggerImportBtn && importFileInput) {
+    triggerImportBtn.addEventListener('click', () => {
+      importFileInput.click();
+    });
+    importFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = importTicketsJSON(event.target.result);
+        if (result.success) {
+          showToast(`${result.count}개의 티켓이 성공적으로 복원되었습니다!`, '📤');
+          renderApp();
+        } else {
+          alert('복원 실패: ' + result.error);
+        }
+      };
+      reader.readAsText(file);
+      importFileInput.value = '';
+    });
+  }
+
+  // 새 티켓 등록 모달 열기 (Create Modal Open)
+  const openAddModalBtn = document.getElementById('open-add-ticket-modal-btn');
+  const ticketFormModal = document.getElementById('ticket-form-modal');
+  const closeTicketFormBtn = document.getElementById('close-ticket-form-modal-btn');
+  const cancelTicketFormBtn = document.getElementById('cancel-ticket-form-btn');
+
+  if (openAddModalBtn && ticketFormModal) {
+    openAddModalBtn.addEventListener('click', () => {
+      editingTicketId = null;
+      document.getElementById('ticket-modal-title').textContent = '➕ 새 티켓 등록';
+      document.getElementById('form-ticket-round').value = activeRound;
+      document.getElementById('form-ticket-label').value = '';
+      document.getElementById('form-ticket-memo').value = '';
+      document.getElementById('form-ticket-purchased').checked = false;
+      document.querySelectorAll('.form-num-input').forEach(input => input.value = '');
+      ticketFormModal.classList.add('open');
+    });
+  }
+
+  // 티켓 수정 모달 열기 (Edit Modal Open - Update)
+  document.querySelectorAll('.edit-ticket-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const ticketId = btn.getAttribute('data-edit-id');
+      const ticket = getTicketById(ticketId);
+      if (!ticket) return;
+
+      editingTicketId = ticketId;
+      document.getElementById('ticket-modal-title').textContent = '✏️ 티켓 정보 수정';
+      document.getElementById('form-ticket-round').value = ticket.round;
+      document.getElementById('form-ticket-label').value = ticket.label;
+      document.getElementById('form-ticket-memo').value = ticket.memo || '';
+      document.getElementById('form-ticket-purchased').checked = ticket.isPurchased;
+      
+      const numInputs = document.querySelectorAll('.form-num-input');
+      ticket.numbers.forEach((num, idx) => {
+        if (numInputs[idx]) numInputs[idx].value = num;
+      });
+
+      ticketFormModal.classList.add('open');
+    });
+  });
+
+  const closeFormModal = () => {
+    if (ticketFormModal) ticketFormModal.classList.remove('open');
+  };
+  if (closeTicketFormBtn) closeTicketFormBtn.addEventListener('click', closeFormModal);
+  if (cancelTicketFormBtn) cancelTicketFormBtn.addEventListener('click', closeFormModal);
+
+  // 티켓 폼 제출 (Create / Update Submit)
+  const ticketForm = document.getElementById('ticket-crud-form');
+  if (ticketForm) {
+    ticketForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const round = parseInt(document.getElementById('form-ticket-round').value, 10);
+      const label = document.getElementById('form-ticket-label').value;
+      const memo = document.getElementById('form-ticket-memo').value;
+      const isPurchased = document.getElementById('form-ticket-purchased').checked;
+
+      const numInputs = Array.from(document.querySelectorAll('.form-num-input'));
+      const numbers = numInputs.map(input => parseInt(input.value, 10)).filter(n => !isNaN(n) && n >= 1 && n <= 45);
+      const uniqueNumbers = Array.from(new Set(numbers));
+
+      if (uniqueNumbers.length !== 6) {
+        alert('1부터 45 사이의 서로 다른 6개의 번호를 모두 입력해주세요.');
+        return;
+      }
+
+      if (editingTicketId) {
+        // Update
+        updateTicket(editingTicketId, {
+          round,
+          label,
+          numbers: uniqueNumbers,
+          memo,
+          isPurchased
+        });
+        showToast('티켓 정보가 수정되었습니다!', '✏️');
+      } else {
+        // Create
+        createTicket({
+          round,
+          label,
+          numbers: uniqueNumbers,
+          memo,
+          isPurchased
+        });
+        showToast('새 티켓이 보관함에 저장되었습니다!', '💾');
+      }
+
+      closeFormModal();
+      renderApp();
+    });
+  }
+
+  // 폼 입력 시 다음 번호 인풋으로 자동 포커스
+  document.querySelectorAll('.form-num-input').forEach(input => {
+    input.addEventListener('input', (e) => {
+      const idx = parseInt(e.target.getAttribute('data-idx'), 10);
+      let val = parseInt(e.target.value, 10);
+      if (val > 45) e.target.value = 45;
+      if (val < 1 && e.target.value !== '') e.target.value = 1;
+      if (e.target.value && idx < 5) {
+        const next = document.querySelector(`.form-num-input[data-idx="${idx + 1}"]`);
+        if (next) next.focus();
+      }
     });
   });
 
@@ -469,8 +952,7 @@ function bindEvents(games, activeRound) {
     closeRuleBtn.addEventListener('click', () => ruleModal.classList.remove('open'));
   }
 
-  // 모달 바깥 클릭 시 닫기
-  [slipModal, ruleModal].forEach(m => {
+  [slipModal, ruleModal, ticketFormModal].forEach(m => {
     if (m) {
       m.addEventListener('click', (e) => {
         if (e.target === m) m.classList.remove('open');
@@ -587,7 +1069,6 @@ function updateCountdown() {
 // 타이머 인터벌
 setInterval(() => {
   updateCountdown();
-  // 상태가 바뀔 시각이 되면 전체 다시 렌더링
   const state = getLottoState();
   if (state.timeRemainingMs === 0 || state.timeUntilReleaseMs === 0) {
     renderApp();
