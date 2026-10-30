@@ -237,7 +237,7 @@ function renderApp() {
 
         <div class="checker-inputs">
           ${[0, 1, 2, 3, 4, 5].map(idx => `
-            <input type="number" min="1" max="45" class="ball-input" data-idx="${idx}" value="${customInputs[idx]}" placeholder="${idx + 1}" />
+            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" class="ball-input" data-idx="${idx}" value="${customInputs[idx]}" placeholder="${idx + 1}" autocomplete="off" />
           `).join('')}
           <button class="btn btn-primary" id="check-ticket-btn" style="height: 52px; padding: 0 24px;">
             당첨 확인
@@ -365,7 +365,7 @@ function renderApp() {
             <label>로또 6개 번호 (1 ~ 45)</label>
             <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;">
               ${[0, 1, 2, 3, 4, 5].map(i => `
-                <input type="number" min="1" max="45" class="form-input form-num-input" data-idx="${i}" placeholder="번호" required style="text-align: center; font-weight: 700; font-family: var(--font-mono); padding: 8px 4px;" />
+                <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" class="form-input form-num-input" data-idx="${i}" placeholder="번호" required autocomplete="off" style="text-align: center; font-weight: 700; font-family: var(--font-mono); padding: 8px 4px;" />
               `).join('')}
             </div>
           </div>
@@ -645,6 +645,95 @@ function renderSumDistribution(games) {
 }
 
 // ========================================================
+// 로또 번호 6개 입력 제어 헬퍼 (1~45 정수만 허용, 최대 2자리, 2자리 완성 시에만 다음 칸 이동)
+// ========================================================
+function setupLottoNumberInputs(selector, onUpdate) {
+  const inputs = Array.from(document.querySelectorAll(selector));
+  inputs.forEach((input, idx) => {
+    // 1. input 이벤트: 숫자만 허용, 최대 2자리, 1~45 범위 자동 보정
+    input.addEventListener('input', (e) => {
+      let raw = e.target.value.replace(/[^0-9]/g, '').slice(0, 2);
+      if (raw === '') {
+        e.target.value = '';
+        if (onUpdate) onUpdate(idx, '');
+        return;
+      }
+
+      let num = parseInt(raw, 10);
+      if (num > 45) {
+        num = 45;
+        raw = '45';
+      } else if (num === 0) {
+        num = 1;
+        raw = '1';
+      }
+
+      e.target.value = raw;
+      if (onUpdate) onUpdate(idx, num);
+
+      // 두 자리 숫자(10~45 또는 01~09)가 완성되었을 때만 다음 칸으로 이동
+      if (raw.length === 2 && idx < inputs.length - 1) {
+        const next = inputs[idx + 1];
+        if (next) {
+          next.focus();
+          next.select();
+        }
+      }
+    });
+
+    // 2. keydown 이벤트: 백스페이스/화살표/엔터로 직관적인 칸 이동
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && e.target.value === '' && idx > 0) {
+        const prev = inputs[idx - 1];
+        if (prev) {
+          prev.focus();
+          prev.select();
+        }
+      } else if ((e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') && idx < inputs.length - 1) {
+        e.preventDefault();
+        const next = inputs[idx + 1];
+        if (next) {
+          next.focus();
+          next.select();
+        }
+      } else if (e.key === 'ArrowLeft' && idx > 0) {
+        const prev = inputs[idx - 1];
+        if (prev) {
+          prev.focus();
+          prev.select();
+        }
+      }
+    });
+
+    // 3. paste 이벤트: 여러 번호 한번에 붙여넣기 지원 (예: "8 14 21 22 42 45" 또는 "8, 14, 21, 22, 42, 45")
+    input.addEventListener('paste', (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      const matches = text.match(/\d+/g);
+      if (matches && matches.length > 0) {
+        matches.slice(0, inputs.length - idx).forEach((valStr, offset) => {
+          const targetInput = inputs[idx + offset];
+          if (targetInput) {
+            let n = parseInt(valStr, 10);
+            if (n > 45) n = 45;
+            if (n < 1) n = 1;
+            targetInput.value = String(n);
+            if (onUpdate) onUpdate(idx + offset, n);
+          }
+        });
+        const lastTarget = inputs[Math.min(idx + matches.length, inputs.length - 1)];
+        if (lastTarget) lastTarget.focus();
+      }
+    });
+
+    // 4. 포커스 시 기존 숫자 바로 교체할 수 있도록 자동 전체 선택
+    input.addEventListener('focus', () => {
+      input.select();
+    });
+  });
+}
+
+// ========================================================
 // 이벤트 바인딩 (CRUD Event Listeners)
 // ========================================================
 function bindEvents(games, activeRound) {
@@ -906,19 +995,8 @@ function bindEvents(games, activeRound) {
     });
   }
 
-  // 폼 입력 시 다음 번호 인풋으로 자동 포커스
-  document.querySelectorAll('.form-num-input').forEach(input => {
-    input.addEventListener('input', (e) => {
-      const idx = parseInt(e.target.getAttribute('data-idx'), 10);
-      let val = parseInt(e.target.value, 10);
-      if (val > 45) e.target.value = 45;
-      if (val < 1 && e.target.value !== '') e.target.value = 1;
-      if (e.target.value && idx < 5) {
-        const next = document.querySelector(`.form-num-input[data-idx="${idx + 1}"]`);
-        if (next) next.focus();
-      }
-    });
-  });
+  // 폼 입력 시 번호 제어 (1~45 정수만, 2자리 입력 시 다음 칸 자동 이동)
+  setupLottoNumberInputs('.form-num-input');
 
   // 회차 셀렉트
   const roundSelect = document.getElementById('round-select');
@@ -971,20 +1049,9 @@ function bindEvents(games, activeRound) {
     });
   }
 
-  // 번호 채점기 입력 이벤트
-  const inputs = document.querySelectorAll('.ball-input');
-  inputs.forEach(input => {
-    input.addEventListener('input', (e) => {
-      const idx = parseInt(e.target.getAttribute('data-idx'), 10);
-      let val = parseInt(e.target.value, 10);
-      if (val > 45) val = 45;
-      if (val < 1 && e.target.value !== '') val = 1;
-      customInputs[idx] = isNaN(val) ? '' : val;
-      if (val && idx < 5) {
-        const next = document.querySelector(`.ball-input[data-idx="${idx + 1}"]`);
-        if (next) next.focus();
-      }
-    });
+  // 번호 채점기 입력 제어 (1~45 정수만, 2자리 입력 시에만 다음 칸 이동)
+  setupLottoNumberInputs('.ball-input', (idx, num) => {
+    customInputs[idx] = num;
   });
 
   const checkBtn = document.getElementById('check-ticket-btn');
